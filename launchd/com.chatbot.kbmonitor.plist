@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Unique identifier for this job -->
+    <key>Label</key>
+    <string>com.chatbot.kbmonitor</string>
+
+    <!-- Script to run -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/agent2025/Downloads/chatbot-kb-monitor/scripts/run_monitor.sh</string>
+    </array>
+
+    <!-- Schedule: Run every day at 9:20 AM -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>9</integer>
+        <key>Minute</key>
+        <integer>20</integer>
+    </dict>
+
+    <!-- Environment variables -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <!-- Working directory -->
+    <key>WorkingDirectory</key>
+    <string>/Users/agent2025/Downloads/chatbot-kb-monitor</string>
+
+    <!-- Standard output and error logs -->
+    <key>StandardOutPath</key>
+    <string>/Users/agent2025/Downloads/chatbot-kb-monitor/logs/launchd.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/agent2025/Downloads/chatbot-kb-monitor/logs/launchd.err</string>
+
+    <!-- Run at load time (for testing) -->
+    <!-- Remove this key to only run at scheduled time -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- Keep job alive - if it crashes, restart it -->
+    <key>KeepAlive</key>
+    <false/>
+
+    <!-- Limit frequency of runs (prevent spam if failing) -->
+    <key>ThrottleInterval</key>
+    <integer>60</integer>
+</dict>
+</plist>

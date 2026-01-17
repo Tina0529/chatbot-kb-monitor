@@ -1,0 +1,50 @@
+# Chatbot KB Monitor Configuration
+
+# Browser settings
+browser:
+  headless: true
+  timeout: 30000  # milliseconds
+  slow_mo: 0  # milliseconds
+  screenshot:
+    enabled: true
+    full_page: true
+
+# Monitoring settings
+monitoring:
+  base_url: "https://admin.gbase.ai"
+  kb_name: "ニュウマン高輪教育用"
+  navigation:
+    related_kb: "関連ナレッジベース"
+    file_documents: "ファイルとドキュメント"
+
+  # Text patterns for detecting failures
+  failure_indicators:
+    - "失敗"
+    - "エラー"
+    - "error"
+    - "failed"
+
+  # Retry settings
+  retry:
+    max_attempts: 3
+    backoff_base: 2  # exponential backoff multiplier
+    initial_delay: 1  # seconds
+
+# Logging settings
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  file: "logs/monitor.log"
+  max_bytes: 10485760  # 10MB
+  backup_count: 5
+
+# Screenshot settings
+screenshots:
+  directory: "screenshots"
+  prefix: "kb_monitor_"
+  format: "png"  # png or jpeg
+
+# Lark notification settings
+lark:
+  enabled: true
+  timeout: 10  # seconds
+  message_timezone: "Asia/Tokyo"
