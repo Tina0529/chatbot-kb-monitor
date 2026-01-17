@@ -30,10 +30,10 @@ async def main() -> int:
     try:
         config = load_config()
         secrets = load_secrets()
-    except FileNotFoundError as e:
+    except ValueError as e:
         print(f"Configuration error: {e}", file=sys.stderr)
-        print("\nPlease ensure config/config.yaml and config/secrets.yaml exist.", file=sys.stderr)
-        print("Copy config/secrets.example.yaml to secrets.yaml and fill in your credentials.", file=sys.stderr)
+        print("\nPlease ensure config/config.yaml exists.", file=sys.stderr)
+        print("For GitHub Actions: Set environment variables (KB_USERNAME, KB_PASSWORD, LARK_WEBHOOK_URL, etc.)", file=sys.stderr)
         return 1
     except Exception as e:
         print(f"Configuration error: {e}", file=sys.stderr)

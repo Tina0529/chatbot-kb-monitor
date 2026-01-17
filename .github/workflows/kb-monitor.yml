@@ -21,30 +21,50 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 2. 设置 Python
+      # 2. 安装 Playwright 系统依赖
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libnss3 \
+            libnspr4 \
+            libatk1.0-0 \
+            libatk-bridge2.0-0 \
+            libcups2 \
+            libdrm2 \
+            libxkbcommon0 \
+            libxcomposite1 \
+            libxdamage1 \
+            libxfixes3 \
+            libxrandr2 \
+            libgbm1 \
+            libasound2 \
+            fonts-liberation \
+            fonts-noto-color-emoji
+
+      # 3. 设置 Python
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
-          cache: 'pip'
 
-      # 3. 安装依赖
+      # 4. 安装依赖
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # 4. 安装 Playwright 浏览器
+      # 5. 安装 Playwright 浏览器
       - name: Install Playwright browsers
-        run: playwright install chromium
+        run: playwright install chromium --with-deps
 
-      # 5. 创建必要的目录
+      # 6. 创建必要的目录
       - name: Create directories
         run: |
           mkdir -p logs
           mkdir -p screenshots
 
-      # 6. 运行监控（使用 Secrets）
+      # 7. 运行监控（使用 Secrets）
       - name: Run KB Monitor
         env:
           # 从 GitHub Secrets 读取敏感信息
@@ -56,7 +76,7 @@ jobs:
         run: |
           python src/main.py
 
-      # 7. 上传截图作为 Artifact（保留 30 天）
+      # 8. 上传截图作为 Artifact（保留 30 天）
       - name: Upload screenshots
         if: always()
         uses: actions/upload-artifact@v4
@@ -65,7 +85,7 @@ jobs:
           path: screenshots/
           retention-days: 30
 
-      # 8. 上传日志
+      # 9. 上传日志
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
