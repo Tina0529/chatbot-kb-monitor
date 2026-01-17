@@ -3,8 +3,8 @@ name: KB Monitor
 on:
   # 定时触发 - 每天 UTC 1:20 = 北京时间 9:20
   schedule:
-    - cron: '20 1 * * *'
-
+    - cront: '20 1 * * *'
+  
   # 手动触发
   workflow_dispatch:
 
@@ -12,80 +12,97 @@ jobs:
   monitor:
     name: Monitor KB Status
     runs-on: ubuntu-latest
-
+    
     # 设置超时时间为 30 分钟
     timeout-minutes: 30
-
+    
     steps:
       # 1. 检出代码
       - name: Checkout code
         uses: actions/checkout@v4
-
+      
       # 2. 安装 Playwright 系统依赖
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            libnss3 \
-            libnspr4 \
-            libatk1.0-0 \
-            libatk-bridge2.0-0 \
-            libcups2 \
-            libdrm2 \
-            libxkbcommon0 \
-            libxcomposite1 \
-            libxdamage1 \
-            libxfixes3 \
-            libxrandr2 \
-            libgbm1 \
-            libasound2 \
-            fonts-liberation \
+          sudo apt-get install -y \\
+            libnss3 \\
+            libnspr4 \\
+            libatk1.0-0 \\
+            libatk-bridge2.0-0 \\
+            libcups2 \\
+            libdrm2 \\
+            libxkbcommon0 \\
+            libxcomposite1 \\
+            libxdamage1 \\
+            libxfixes3 \\
+            libxrandr2 \\
+            libgbm1 \\
+            libasound2t64t64 \\
+            fonts-liberation \\
             fonts-noto-color-emoji
-
+      
       # 3. 设置 Python
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
-
+      
       # 4. 安装依赖
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-
+      
       # 5. 安装 Playwright 浏览器
       - name: Install Playwright browsers
         run: playwright install chromium --with-deps
-
+      
       # 6. 创建必要的目录
       - name: Create directories
         run: |
           mkdir -p logs
           mkdir -p screenshots
-
+      
       # 7. 验证环境变量（调试用）
       - name: Verify environment variables
-        run: |
-          echo "KB_USERNAME is set: $([[ -n $KB_USERNAME ]] && echo 'YES' || echo 'NO')"
-          echo "KB_PASSWORD is set: $([[ -n $KB_PASSWORD ]] && echo 'YES' || echo 'NO')"
-          echo "LARK_WEBHOOK_URL is set: $([[ -n $LARK_WEBHOOK_URL ]] && echo 'YES' || echo 'NO')"
-          echo "LARK_APP_ID is set: $([[ -n $LARK_APP_ID ]] && echo 'YES' || echo 'NO')"
-          echo "LARK_APP_SECRET is set: $([[ -n $LARK_APP_SECRET ]] && echo 'YES' || echo 'NO')"
-
-      # 8. 运行监控（使用 Secrets）
-      - name: Run KB Monitor
         env:
-          # 从 GitHub Secrets 读取敏感信息
           LARK_WEBHOOK_URL: ${{ secrets.LARK_WEBHOOK_URL }}
           LARK_APP_ID: ${{ secrets.LARK_APP_ID }}
           LARK_APP_SECRET: ${{ secrets.LARK_APP_SECRET }}
           KB_USERNAME: ${{ secrets.KB_USERNAME }}
           KB_PASSWORD: ${{ secrets.KB_PASSWORD }}
         run: |
+          echo "KB_USERNAME is set: $([[ -n $KB_USERNAME ]] && echo 'YES' || echo 'NO')"
+          echo "KB_PASSWORD is set: $([[ -n $KB_PASSWORD ]] && echo 'YES' || 'NO')"
+          echo "LARK_WEBHOOK_URL is set: $([[ -n $LARK_WEBHOOK_URL ]] && echo 'YES' || 'NO')"
+          echo "LARK_APP_ID is set: $([[ -n $LARK_APP_ID ]] && echo 'YES' || 'NO')"
+          echo "LARK_APP_SECRET is set: $([[ -n $LARK_APP_SECRET ]] && echo 'YES' || 'NO')"
+      
+      # 8. 测试配置加载
+      - name: Test configuration loading
+        env:
+          LARK_WEBHOOK_URL: ${{ secrets.LARK_WEBHOOK_URL }}
+          LARK_APP_ID: ${{ secrets.LARK_APP_ID }}
+          LARK_APP_SECRET: ${{ secrets.LARK_APP_SECRET }}
+          KB_USERNAME: ${{ secrets.KB_USERNAME }}
+          KB_PASSWORD: ${{ secrets.KB_PASSWORD }}
+        run: |
+          python test_env.py
+      
+      # 9. 运行监控（使用 Secrets）
+      - name: Run KB Monitor
+        env:
+          # 从 GitHub Secrets 读取敏感信息
+          LARK_WEBHOOK_URL: ${{ secrets.LARK_WEBHOOK_URL }}
+          LARK_APP_ID: ${{ secrets.LARK_APP_ID }}
+          LARK_APP_SECRET: ${{ secrets.LARK_APP_SECRET }}
+          KB_USERNAME: $ secrets.KB_USERNAME 
+          KB_PASSWORD: $ secrets.KB_PASSWORD }
+        run: |
           python src/main.py
-
-      # 8. 上传截图作为 Artifact（保留 30 天）
+      
+      # 10. 上传截图作为 Artifact（保留 30 天）
       - name: Upload screenshots
         if: always()
         uses: actions/upload-artifact@v4
@@ -93,8 +110,8 @@ jobs:
           name: screenshots-${{ github.run_number }}
           path: screenshots/
           retention-days: 30
-
-      # 9. 上传日志
+      
+      # 11. 上传日志
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
