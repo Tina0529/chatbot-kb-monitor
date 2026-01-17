@@ -159,17 +159,54 @@ def load_secrets() -> SecretsConfig:
     """
     Load and validate secrets configuration.
 
+    Priority:
+    1. Environment variables (for GitHub Actions, Docker, etc.)
+    2. secrets.yaml file (for local development)
+
     Returns:
         SecretsConfig: Validated secrets object
 
     Raises:
-        FileNotFoundError: If secrets.yaml is not found
-        ValueError: If secrets are invalid
+        ValueError: If no secrets configuration is found
     """
-    config_dir = get_config_dir()
-    secrets_path = config_dir / "secrets.yaml"
+    # Try to load from environment variables first
+    secrets_data = {}
 
-    secrets_data = load_yaml(secrets_path)
+    # Get credentials from environment
+    username = os.environ.get("KB_USERNAME")
+    password = os.environ.get("KB_PASSWORD")
+    if username and password:
+        secrets_data["credentials"] = {"username": username, "password": password}
+
+    # Get Lark config from environment
+    webhook_url = os.environ.get("LARK_WEBHOOK_URL")
+    app_id = os.environ.get("LARK_APP_ID")
+    app_secret = os.environ.get("LARK_APP_SECRET")
+
+    lark_config = {}
+    if webhook_url:
+        lark_config["webhook_url"] = webhook_url
+    if app_id:
+        lark_config["app_id"] = app_id
+    if app_secret:
+        lark_config["app_secret"] = app_secret
+
+    if lark_config:
+        secrets_data["lark"] = lark_config
+
+    # If no environment variables found, try loading from file
+    if not secrets_data:
+        config_dir = get_config_dir()
+        secrets_path = config_dir / "secrets.yaml"
+
+        if secrets_path.exists():
+            secrets_data = load_yaml(secrets_path)
+        else:
+            raise ValueError(
+                "No secrets configuration found. "
+                "Please set environment variables (KB_USERNAME, KB_PASSWORD, LARK_WEBHOOK_URL, etc.) "
+                "or create config/secrets.yaml file."
+            )
 
     return SecretsConfig(**secrets_data)
 
