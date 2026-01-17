@@ -64,7 +64,16 @@ jobs:
           mkdir -p logs
           mkdir -p screenshots
 
-      # 7. 运行监控（使用 Secrets）
+      # 7. 验证环境变量（调试用）
+      - name: Verify environment variables
+        run: |
+          echo "KB_USERNAME is set: $([[ -n $KB_USERNAME ]] && echo 'YES' || echo 'NO')"
+          echo "KB_PASSWORD is set: $([[ -n $KB_PASSWORD ]] && echo 'YES' || echo 'NO')"
+          echo "LARK_WEBHOOK_URL is set: $([[ -n $LARK_WEBHOOK_URL ]] && echo 'YES' || echo 'NO')"
+          echo "LARK_APP_ID is set: $([[ -n $LARK_APP_ID ]] && echo 'YES' || echo 'NO')"
+          echo "LARK_APP_SECRET is set: $([[ -n $LARK_APP_SECRET ]] && echo 'YES' || echo 'NO')"
+
+      # 8. 运行监控（使用 Secrets）
       - name: Run KB Monitor
         env:
           # 从 GitHub Secrets 读取敏感信息
