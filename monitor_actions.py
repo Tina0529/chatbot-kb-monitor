@@ -108,8 +108,9 @@ async def main() -> int:
             ]
 
             total_items = 0
-            failed_count = 0
+            failed_rows = []  # Store failed rows with file names
             files_found = False
+            used_selector = None
 
             for selector, description in selectors_to_try:
                 try:
@@ -120,35 +121,46 @@ async def main() -> int:
                         print(f"  ✓ Found {len(rows)} items using '{selector}'")
                         files_found = True
                         total_items = len(rows)
+                        used_selector = selector
 
-                        # Scan for failures
+                        # Scan for failures and store row elements
                         failure_indicators = ["失敗", "エラー", "error", "failed"]
 
-                        for i, row in enumerate(rows[:50]):  # Check first 50 items
+                        for i, row in enumerate(rows):
                             try:
                                 row_text = await row.inner_text()
 
                                 # Check for failure indicators
+                                is_failed = False
                                 for indicator in failure_indicators:
                                     if indicator in row_text:
-                                        failed_count += 1
-                                        # Extract file name (first cell usually)
-                                        try:
-                                            first_cell = row.locator('td').first
-                                            if await first_cell.count() > 0:
-                                                file_name = await first_cell.inner_text()
-                                                print(f"    Failed: {file_name[:50]}...")
-                                                break
-                                        except:
-                                            print(f"    Failed: {row_text[:50]}...")
-                                            break
-                                # Stop after finding first few failures for performance
-                                if failed_count >= 5:
-                                    print(f"    ... (and {failed_count} total failures)")
-                                    break
+                                        is_failed = True
+                                        break
+
+                                if is_failed:
+                                    # Extract file name (first cell usually)
+                                    try:
+                                        first_cell = row.locator('td').first
+                                        if await first_cell.count() > 0:
+                                            file_name = await first_cell.inner_text()
+                                            file_name = file_name.strip()
+                                            failed_rows.append({
+                                                'row': row,
+                                                'file_name': file_name,
+                                                'index': i
+                                            })
+                                            print(f"    Failed: {file_name}")
+                                    except:
+                                        failed_rows.append({
+                                            'row': row,
+                                            'file_name': f'File #{i}',
+                                            'index': i
+                                        })
+                                        print(f"    Failed: (unable to get name)")
                             except Exception as e:
                                 continue
 
+                        print(f"  Total: {total_items} items, {len(failed_rows)} failed")
                         break  # Use first successful selector
                 except Exception as e:
                     print(f"  Selector '{selector}' failed: {e}")
@@ -184,7 +196,13 @@ async def main() -> int:
                 print(f"Error notification sent: {response.status_code}")
                 return 1
 
-            print(f"\n[Step 4] SCAN COMPLETE: {total_items} total items, {failed_count} failures")
+            print(f"\n[Step 4] SCAN COMPLETE: {total_items} total items, {len(failed_rows)} failed")
+
+            # Step 4.5: Retry failed items (if any)
+            retry_results = []
+            if failed_rows:
+                print(f"\n[Step 4.5] Retrying {len(failed_rows)} failed items...")
+                retry_results = await retry_failed_items(page, failed_rows, used_selector)
 
             # Step 5: Take screenshot
             timestamp = get_japan_time().strftime("%Y%m%d_%H%M%S")
@@ -208,8 +226,36 @@ async def main() -> int:
             # Step 7: Send notification
             import requests
 
-            color = "green" if failed_count == 0 else "red"
-            emoji = "✅" if failed_count == 0 else "⚠️"
+            # Calculate final status
+            initial_failed = len(failed_rows)
+            successful_retries = sum(1 for r in retry_results if r['success'])
+            still_failed = initial_failed - successful_retries
+
+            color = "green" if still_failed == 0 else ("turquoise" if successful_retries > 0 else "red")
+            emoji = "✅" if still_failed == 0 else ("🔄" if successful_retries > 0 else "⚠️")
+
+            # Build notification content
+            summary_lines = [
+                f"**Time**: {get_japan_time().strftime('%Y-%m-%d %H:%M')} (Asia/Tokyo)",
+                "",
+                "**Summary**:",
+                f"• Total Items: {total_items}",
+                f"• Initially Failed: {initial_failed}",
+            ]
+
+            if retry_results:
+                summary_lines.extend([
+                    f"• Successfully Retried: {successful_retries}",
+                    f"• Still Failed: {still_failed}",
+                    f"• Status: {'✅ All OK' if still_failed == 0 else '🔄 Partially Recovered' if successful_retries > 0 else '⚠️ Has Failures'}",
+                ])
+            else:
+                summary_lines.extend([
+                    f"• Failed Items: {initial_failed}",
+                    f"• Status: {'✅ All OK' if initial_failed == 0 else '⚠️ Has Failures'}",
+                ])
+
+            summary_lines.append(f"**Screenshot**: {'See below' if image_key else 'No screenshot available'}")
 
             card = {
                 "msg_type": "interactive",
@@ -223,19 +269,39 @@ async def main() -> int:
                             "tag": "div",
                             "text": {
                                 "tag": "lark_md",
-                                "content": f"""**Time**: {get_japan_time().strftime('%Y-%m-%d %H:%M')} (Asia/Tokyo)
-
-**Summary**:
-• Total Items: {total_items}
-• Failed Items: {failed_count}
-• Status: {"✅ All OK" if failed_count == 0 else "⚠️ Has Failures"}
-
-**Screenshot**: {"See below" if image_key else "No screenshot available"}"""
+                                "content": "\n".join(summary_lines)
                             }
                         }
                     ]
                 }
             }
+
+            # Add retry details if any retries were performed
+            if retry_results:
+                retry_details = []
+                for result in retry_results:
+                    status_icon = "✅" if result['success'] else "❌"
+                    retry_details.append(f"{status_icon} **{result['file_name']}**")
+                    if result['attempts'] > 0:
+                        retry_details.append(f"   Attempts: {result['attempts']}, Result: {result['final_status']}")
+
+                if retry_details:
+                    card["card"]["elements"].append({"tag": "hr"})
+                    card["card"]["elements"].append({
+                        "tag": "div",
+                        "text": {
+                            "tag": "lark_md",
+                            "content": "**Retry Details**:\n" + "\n".join(retry_details[:10])
+                        }
+                    })
+                    if len(retry_details) > 10:
+                        card["card"]["elements"].append({
+                            "tag": "div",
+                            "text": {
+                                "tag": "lark_md",
+                                "content": f"\n... and {len(retry_details) - 10} more"
+                            }
+                        })
 
             # Add image element if available
             if image_key:
@@ -342,6 +408,143 @@ async def upload_image_to_lark_sdk(image_path: str, app_id: str, app_secret: str
         import traceback
         traceback.print_exc()
         return None
+
+
+async def retry_failed_items(page, failed_rows: list, table_selector: str) -> list:
+    """
+    Retry failed items by clicking Action menu and selecting "重新学习".
+
+    Args:
+        page: Playwright page object
+        failed_rows: List of dicts with 'row', 'file_name', 'index'
+        table_selector: The selector that successfully found the table
+
+    Returns:
+        List of retry results with file_name, attempts, final_status
+    """
+    results = []
+    failure_indicators = ["失敗", "エラー", "error", "failed"]
+    MAX_RETRIES = 3
+
+    for item in failed_rows:
+        file_name = item['file_name']
+        row_index = item['index']
+
+        print(f"\n  Retrying: {file_name}")
+        result = {
+            'file_name': file_name,
+            'attempts': 0,
+            'final_status': 'still_failed',
+            'success': False
+        }
+
+        for attempt in range(1, MAX_RETRIES + 1):
+            result['attempts'] = attempt
+            print(f"    Attempt {attempt}/{MAX_RETRIES}...", end=" ")
+
+            try:
+                # Re-find the row (page may have changed)
+                rows = await page.locator(table_selector).all()
+                if row_index >= len(rows):
+                    print(f"SKIP (row no longer exists)")
+                    result['final_status'] = 'row_disappeared'
+                    break
+
+                current_row = rows[row_index]
+
+                # Click the three-dot menu (ActionIcon)
+                # Try multiple selectors for the menu button
+                menu_clicked = False
+                menu_selectors = [
+                    current_row.locator('.mantine-ActionIcon-icon'),
+                    current_row.locator('[class*="ActionIcon"]'),
+                    current_row.locator('button[aria-label*="more" i]'),
+                    current_row.locator('button:has-text("…")'),
+                    current_row.locator('button:last-child'),
+                ]
+
+                for menu_sel in menu_selectors:
+                    try:
+                        if await menu_sel.count() > 0:
+                            await menu_sel.first.click()
+                            menu_clicked = True
+                            await asyncio.sleep(1)  # Wait for menu to appear
+                            break
+                    except:
+                        continue
+
+                if not menu_clicked:
+                    print(f"FAIL (could not find menu button)")
+                    result['final_status'] = 'menu_not_found'
+                    break
+
+                # Click "重新学习" (Retry learning) menu item
+                # The menu item label class: mantine-Menu-itemLabel
+                retry_clicked = False
+                retry_selectors = [
+                    page.locator('.mantine-Menu-itemLabel:has-text("重新学习")'),
+                    page.locator('.mantine-Menu-itemLabel:has-text("再学習")'),
+                    page.locator('[class*="Menu-item"]:has-text("重新学习")'),
+                    page.locator('[class*="Menu-item"]:has-text("再学習")'),
+                    page.get_by_text("重新学习"),
+                    page.get_by_text("再学習"),
+                ]
+
+                for retry_sel in retry_selectors:
+                    try:
+                        if await retry_sel.count() > 0:
+                            await retry_sel.first.click()
+                            retry_clicked = True
+                            await asyncio.sleep(3)  # Wait for processing
+                            break
+                    except:
+                        continue
+
+                if not retry_clicked:
+                    print(f"FAIL (could not find retry option)")
+                    # Click outside to close menu
+                    await page.keyboard.press('Escape')
+                    await asyncio.sleep(0.5)
+                    result['final_status'] = 'retry_option_not_found'
+                    break
+
+                # Check if status changed
+                await asyncio.sleep(2)  # Extra wait for status update
+                rows_after = await page.locator(table_selector).all()
+                if row_index < len(rows_after):
+                    check_row = rows_after[row_index]
+                    row_text = await check_row.inner_text()
+
+                    # Check if still has failure indicators
+                    still_failed = any(indicator in row_text for indicator in failure_indicators)
+
+                    if not still_failed:
+                        print(f"SUCCESS! ✓")
+                        result['final_status'] = 'success'
+                        result['success'] = True
+                        break
+                    else:
+                        if attempt < MAX_RETRIES:
+                            print(f"still failed...")
+                        else:
+                            print(f"FAIL (max retries reached)")
+                            result['final_status'] = 'max_retries_reached'
+                else:
+                    print(f"FAIL (row disappeared)")
+                    result['final_status'] = 'row_disappeared'
+                    break
+
+            except Exception as e:
+                print(f"ERROR: {e}")
+                if attempt < MAX_RETRIES:
+                    await asyncio.sleep(2)
+                else:
+                    result['final_status'] = f'error: {str(e)[:50]}'
+
+        results.append(result)
+        print(f"    Final: {result['final_status']}")
+
+    return results
 
 
 async def get_lark_access_token_async(app_id: str, app_secret: str) -> str:
