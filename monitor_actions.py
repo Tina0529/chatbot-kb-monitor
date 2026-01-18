@@ -57,7 +57,7 @@ async def main() -> int:
             await page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
 
             # Login if needed
-            if "admin.gbase.ai" in target_url and "admin.gbase.ai" not in page.url():
+            if "admin.gbase.ai" in target_url and ("admin.gbase.ai" not in page.url if isinstance(page.url, str) else ""):
                 print("Logging in...")
                 await page.fill("input[name='username']", username)
                 await page.fill("input[name='password']", password)
