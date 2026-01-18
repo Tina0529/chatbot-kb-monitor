@@ -55,7 +55,7 @@ jobs:
       - name: Install Playwright
         run: |
           pip install playwright
-          playwright install-deps chromium
+          playwright install chromium
       
       # 6. 创建目录
       - name: Create directories
