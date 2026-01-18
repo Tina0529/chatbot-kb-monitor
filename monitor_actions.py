@@ -44,8 +44,7 @@ async def main():
         print("Launching browser...")
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
-            context = await browser.new_context(locale='ja-JP', timezone_id='Asia/Tokyo')
-            page = context.pages[0]
+            page = await browser.new_page()
 
             print("Navigating to KB page...")
             await page.goto("https://admin.gbase.ai")
