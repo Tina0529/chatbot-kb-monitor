@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Simplified monitor script for GitHub Actions - improved version."""
+"""Simplified monitor script for GitHub Actions - with login support."""
 
 import asyncio
 import os
@@ -8,7 +8,7 @@ from pathlib import Path
 from datetime import datetime
 
 # Add src directory to path
-sys.path.insert(0, '/home/runner/work/chatbot-kb-monitor/chatbot-kb-monitor/src')
+sys.path.insert(0, '/home/runner/work/chatbot-kb-monitor/chatbot_kb_monitor/src')
 
 async def main() -> int:
     """Run monitoring with config from environment variables."""
@@ -19,9 +19,8 @@ async def main() -> int:
     webhook_url = os.environ.get("LARK_WEBHOOK_URL", "")
     app_id = os.environ.get("LARK_APP_ID", "")
     app_secret = os.environ.get("LARK_APP_SECRET", "")
-    
-    # Get direct_kb_url if available
     direct_kb_url = os.environ.get("DIRECT_KB_URL", "")
+    base_url = os.environ.get("BASE_URL", "https://admin.gbase.ai")
 
     # Validate required environment variables
     if not username or not password:
@@ -38,7 +37,7 @@ async def main() -> int:
     print(f"Username: {'***' + username[-4:]}")
     print(f"Webhook configured: {'YES' if webhook_url else 'NO'}")
     print(f"Lark App configured: {'YES' if app_id else 'NO'}")
-    print(f"Direct KB URL: {direct_kb_url if direct_kb_url else 'Using step-by-step navigation'}")
+    print(f"Direct KB URL: {direct_kb_url[:50]}..." if direct_kb_url else "Direct KB URL: Not set")
     print("=" * 60)
 
     # Import here (after path is set)
@@ -50,119 +49,177 @@ async def main() -> int:
             browser = await p.chromium.launch(headless=True)
             page = await browser.new_page()
 
-            # Use direct_kb_url if available
-            target_url = direct_kb_url or "https://admin.gbase.ai"
-            
-            print(f"Navigating to: {target_url}")
-            await page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
+            # Step 1: Login
+            print(f"[Step 1] Logging in to {base_url}")
+            await page.goto(base_url, wait_until="load", timeout=60000)
+            await asyncio.sleep(2)
 
-            # Login if needed
-            if "admin.gbase.ai" in target_url and ("admin.gbase.ai" not in page.url if isinstance(page.url, str) else ""):
-                print("Logging in...")
-                await page.fill("input[name='username']", username)
-                await page.fill("input[name='password']", password)
-                await page.click("button[type='submit']")
+            # Fill credentials
+            print("  Filling credentials...")
+            await page.fill('input[name="username"]', username)
+            await page.fill('input[type="password"]', password)
+
+            # Click login button (try multiple selectors)
+            print("  Clicking login button...")
+            login_clicked = False
+            for selector in ['button[type="submit"]', 'button:has-text("ログイン")', '.login-button']:
                 try:
-                    await page.wait_for_url("**/datasets/**", timeout=15000)
-                except:
-                    await asyncio.sleep(10)
-
-            # Navigate to KB file page if not already there
-            if "data-source/file" not in page.url and not direct_kb_url:
-                print("Navigating to KB file page...")
-                kb_url = "https://admin.gbase.ai/assist/b50d5b21-262a-4802-a8c4-512af224c72f/datasets/b30daf1b-46c6-4113-af5d-ee68215490d4/data-source/file"
-                await page.goto(kb_url, wait_until="domcontentloaded", timeout=60000)
-
-            # Wait for table to be visible
-            print("Waiting for table to load...")
-            await asyncio.sleep(5)
-
-            # Try multiple possible selectors
-            table_selectors = [
-                'tbody tr',      # table body rows
-                '.list-item',    # alternative: list items
-                '[role="row"]'     # alternative: elements with row role
-            ]
-            
-            rows = None
-            for selector in table_selectors:
-                print(f"Trying selector: {selector}")
-                try:
-                    rows = await page.query_selector_all(selector)
-                    if len(rows) > 0:
-                        print(f"✓ Found {len(rows)} items using '{selector}'")
+                    if await page.locator(selector).count() > 0:
+                        await page.locator(selector).first.click()
+                        login_clicked = True
+                        print(f"  ✓ Clicked login using: {selector}")
                         break
+                except:
+                    continue
+
+            if not login_clicked:
+                print("  ERROR: Could not find login button")
+                return 1
+
+            # Wait for navigation after login
+            await asyncio.sleep(5)
+            print(f"  Current URL after login: {page.url[:80]}")
+
+            # Step 2: Navigate to KB page
+            print(f"\n[Step 2] Navigating to KB page...")
+            if not direct_kb_url:
+                print("  ERROR: DIRECT_KB_URL must be set")
+                return 1
+
+            await page.goto(direct_kb_url, wait_until="load", timeout=60000)
+            await asyncio.sleep(5)  # Wait for dynamic content
+            print(f"  ✓ Current URL: {page.url[:80]}")
+
+            # Step 3: Scan for KB files using multiple selectors
+            print(f"\n[Step 3] Scanning for KB files...")
+
+            selectors_to_try = [
+                ('tbody tr', 'Table body rows'),
+                ('table tr', 'All table rows'),
+                ('[role="row"]', 'ARIA rows'),
+                ('tr', 'All row elements'),
+            ]
+
+            total_items = 0
+            failed_count = 0
+            files_found = False
+
+            for selector, description in selectors_to_try:
+                try:
+                    print(f"  Trying: {description} ({selector})")
+                    rows = await page.locator(selector).all()
+
+                    if len(rows) > 0:
+                        print(f"  ✓ Found {len(rows)} items using '{selector}'")
+                        files_found = True
+                        total_items = len(rows)
+
+                        # Scan for failures
+                        failure_indicators = ["失敗", "エラー", "error", "failed"]
+
+                        for i, row in enumerate(rows[:50]):  # Check first 50 items
+                            try:
+                                row_text = await row.inner_text()
+
+                                # Check for failure indicators
+                                for indicator in failure_indicators:
+                                    if indicator in row_text:
+                                        failed_count += 1
+                                        # Extract file name (first cell usually)
+                                        try:
+                                            first_cell = row.locator('td').first
+                                            if await first_cell.count() > 0:
+                                                file_name = await first_cell.inner_text()
+                                                print(f"    Failed: {file_name[:50]}...")
+                                                break
+                                        except:
+                                            print(f"    Failed: {row_text[:50]}...")
+                                            break
+                                # Stop after finding first few failures for performance
+                                if failed_count >= 5:
+                                    print(f"    ... (and {failed_count} total failures)")
+                                    break
+                            except Exception as e:
+                                continue
+
+                        break  # Use first successful selector
                 except Exception as e:
                     print(f"  Selector '{selector}' failed: {e}")
                     continue
 
-            if not rows or len(rows) == 0:
-                print("ERROR: No table found on page")
-                # Debug: save page source
-                debug_path = "screenshots/debug_page.html"
-                os.makedirs("screenshots", exist_ok=True)
-                await page.screenshot(path=debug_path)
-                print(f"Debug: Page source saved to {debug_path}")
+            if not files_found or total_items == 0:
+                print("\nERROR: No KB files found on page!")
+                print("Possible reasons:")
+                print("  1. DIRECT_KB_URL is incorrect")
+                print("  2. Login failed or session expired")
+                print("  3. Page structure has changed")
+
+                # Send error notification
+                import requests
+
+                error_msg = f"""⚠️ KB Monitor Failed
+
+**Time**: {datetime.now().strftime('%Y-%m-%d %H:%M')} (Asia/Tokyo)
+
+**Error**: No KB files found on page
+
+**URL**: {direct_kb_url[:80] if direct_kb_url else 'Not set'}...
+
+**Please check**:
+1. KB file path configuration (DIRECT_KB_URL)
+2. Login credentials
+3. Network connectivity
+
+---
+*This is an automated message*"""
+
+                response = requests.post(webhook_url, json={"msg_type": "text", "content": {"text": error_msg}}, timeout=10)
+                print(f"Error notification sent: {response.status_code}")
                 return 1
 
-            total_items = len(rows)
-            print(f"Found {total_items} items")
+            print(f"\n[Step 4] SCAN COMPLETE: {total_items} total items, {failed_count} failures")
 
-            # Scan for failures
-            print("Scanning for failures...")
-            failed_count = 0
-            failed_items = []
-
-            for i, row in enumerate(rows[:20]):  # Scan up to 20 items
-                try:
-                    text = await row.inner_text()
-                    
-                    # Check for failure indicators
-                    failure_indicators = ["失敗", "エラー", "error", "failed"]
-                    is_failed = any(indicator in text for indicator in failure_indicators)
-                    
-                    if is_failed:
-                        failed_count += 1
-                        failed_items.append(text[:50] + "..." if len(text) > 50 else text)
-                        print(f"  Failed: {text[:30]}...")
-
-                except Exception as e:
-                    print(f"Error scanning row {i}: {e}")
-                    continue
-
-            print(f"SCAN COMPLETE: {total_items} items, {failed_count} failures")
-
-            # Take full page screenshot
+            # Step 5: Take screenshot
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             screenshot_path = f"screenshots/status_{timestamp}.png"
             os.makedirs("screenshots", exist_ok=True)
-            
+
             await page.screenshot(path=screenshot_path, full_page=True)
             print(f"Screenshot saved: {screenshot_path}")
 
-            # Upload screenshot to Lark
+            # Step 6: Upload screenshot to Lark
             image_key = None
             if app_id and app_secret:
                 image_key = await upload_image_to_lark_async(
                     screenshot_path, app_id, app_secret
                 )
 
-            # Send notification
+            # Step 7: Send notification
             import requests
+
+            color = "green" if failed_count == 0 else "red"
+            emoji = "✅" if failed_count == 0 else "⚠️"
 
             card = {
                 "msg_type": "interactive",
                 "card": {
                     "header": {
-                        "title": {"tag": "plain_text", "content": f"📊 KB Monitor Report"},
-                        "template_color": "green" if failed_count == 0 else "red"
+                        "title": {"tag": "plain_text", "content": f"{emoji} KB Monitor Report"},
+                        "template_color": color
                     },
                     "elements": [
                         {
                             "tag": "div",
                             "text": {
                                 "tag": "lark_md",
-                                "content": f"**Time**: {datetime.now().strftime('%Y-%m-%d %H:%M')} (Asia/Tokyo)\n\n**Summary**:\n- Total Items: {total_items}\n- Failed Items: {failed_count}"
+                                "content": f"""**Time**: {datetime.now().strftime('%Y-%m-%d %H:%M')} (Asia/Tokyo)
+
+**Summary**:
+• Total Items: {total_items}
+• Failed Items: {failed_count}
+• Status: {"✅ All OK" if failed_count == 0 else "⚠️ Has Failures"}
+
+**Screenshot**: {"See below" if image_key else "No screenshot available"}"""
                             }
                         }
                     ]
@@ -174,25 +231,7 @@ async def main() -> int:
                 card["card"]["elements"].append({
                     "tag": "img",
                     "img_key": image_key,
-                    "alt": {"tag": "plain_text", "content": "Screenshot"}
-                })
-                # Add separator
-                card["card"]["elements"].append({"tag": "hr"})
-                # Add timestamp
-                card["card"]["elements"].append({
-                    "tag": "div",
-                    "text": {
-                        "tag": "plain_text",
-                        "content": f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')} (Asia/Tokyo)"
-                    }
-                })
-                # Add newline before closing
-                card["card"]["elements"].append({
-                    "tag": "div",
-                    "text": {
-                        "tag": "plain_text",
-                        "content": f"\n\n---\n*Powered by GitHub Actions*"
-                    }
+                    "alt": {"tag": "plain_text", "content": "KB Status Screenshot"}
                 })
 
             response = requests.post(webhook_url, json=card, timeout=10)
@@ -200,7 +239,7 @@ async def main() -> int:
 
             await browser.close()
 
-            print("=" * 60)
+            print("\n" + "=" * 60)
             print("MONITOR COMPLETED SUCCESSFULLY!")
             print("=" * 60)
 
@@ -208,64 +247,68 @@ async def main() -> int:
         print(f"ERROR: {e}")
         import traceback
         traceback.print_exc()
+
+        # Send error notification
+        import requests
+
+        error_msg = f"""⚠️ KB Monitor Error
+
+**Time**: {datetime.now().strftime('%Y-%m-%d %H:%M')} (Asia/Tokyo)
+
+**Error**: {str(e)}
+
+---
+*This is an automated message*"""
+
+        response = requests.post(webhook_url, json={"msg_type": "text", "content": {"text": error_msg}}, timeout=10)
+        print(f"Error notification sent: {response.status_code}")
+
         return 1
 
     return 0
 
 
 async def upload_image_to_lark_async(image_path: str, app_id: str, app_secret: str) -> str:
-    """
-    Upload image to Lark IM API - async version.
-    
-    Returns: image_key or None
-    """
-    try:
-        import lark_oapi
-        from lark_oapi.im.v1.model.create_image_request import CreateImageRequest
-        from lark_oapi.im.v1.model.create_image_request_body import CreateImageRequestBody
-        from lark_oapi.api.im.v1.model.get_token_response import GetTokenResponse
-        from lark_oapi.api.im.v1.resource.image import Image as ImImage
-        import lark_oapi
+    """Upload image to Lark IM API - async version."""
+    import lark_oapi
+    from lark_oapi.im.v1.model.create_image_request import CreateImageRequest
+    from lark_oapi.im.v1.model.create_image_request_body import CreateImageRequestBody
 
-        # Get access token
-        token = await get_lark_access_token_async(app_id, app_secret)
-        if not token:
-            print("Failed to get access token")
-            return None
-
-        # Read image
-        image_file = Path(image_path)
-        if not image_file.exists():
-            print(f"Image not found: {image_path}")
-            return None
-
-        image_content = image_file.read_bytes()
-
-        # Build request
-        request = CreateImageRequest.builder().request_body(
-            CreateImageRequestBody.builder()
-                .image_type("message")
-                .image(image_content=image_content)
-                .build()
-        ).build()
-
-        # Upload
-        client = lark_oapi.Client.builder().app_id(app_id).app_secret(app_secret).build()
-        response = await client.im.v1.image.create(request)
-
-        if response.code != 0:
-            print(f"Upload error: code={response.code}, msg={response.msg}")
-            return None
-
-        if response.data and hasattr(response.data, 'image_key'):
-            print(f"✓ Image uploaded: {response.data.image_key}")
-            return response.data.image_key
-
-    except Exception as e:
-        print(f"Image upload error: {e}")
-        import traceback
-        traceback.print_exc()
+    # Get access token
+    token = await get_lark_access_token_async(app_id, app_secret)
+    if not token:
+        print("Failed to get access token")
         return None
+
+    # Read image
+    image_file = Path(image_path)
+    if not image_file.exists():
+        print(f"Image not found: {image_path}")
+        return None
+
+    image_content = image_file.read_bytes()
+
+    # Build request
+    request = CreateImageRequest.builder().request_body(
+        CreateImageRequestBody.builder()
+            .image_type("message")
+            .image(image_content=image_content)
+            .build()
+    ).build()
+
+    # Upload
+    client = lark_oapi.Client.builder().app_id(app_id).app_secret(app_secret).build()
+    response = await client.im.v1.image.create(request)
+
+    if response.code != 0:
+        print(f"Upload error: code={response.code}, msg={response.msg}")
+        return None
+
+    if response.data and hasattr(response.data, 'image_key'):
+        print(f"✓ Image uploaded: {response.data.image_key}")
+        return response.data.image_key
+
+    return None
 
 
 async def get_lark_access_token_async(app_id: str, app_secret: str) -> str:
@@ -286,41 +329,6 @@ async def get_lark_access_token_async(app_id: str, app_secret: str) -> str:
         return None
 
     return result.get("tenant_access_token")
-
-
-async def get_lark_access_token(app_id: str, app_secret: str) -> str:
-    """Get Lark access token."""
-    # Try async first, fallback to sync
-    token = await get_lark_access_token_async(app_id, app_secret)
-    if not token:
-        print("Falling back to sync token request...")
-        token = get_lark_access_token_sync(app_id, app_secret)
-    return token
-
-
-def get_lark_access_token_sync(app_id: str, app_secret: str) -> str:
-    """Get Lark access token - synchronous version."""
-    try:
-        import requests
-        
-        url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
-        payload = {
-            "app_id": app_id,
-            "app_secret": app_secret
-        }
-
-        response = requests.post(url, json=payload, timeout=10)
-        response.raise_for_status()
-        result = response.json()
-
-        if result.get("code") != 0:
-            return None
-
-        return result.get("tenant_access_token")
-
-    except Exception as e:
-        print(f"Token error: {e}")
-        return None
 
 
 if __name__ == "__main__":
