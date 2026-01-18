@@ -188,12 +188,16 @@ async def main() -> int:
             await page.screenshot(path=screenshot_path, full_page=True)
             print(f"Screenshot saved: {screenshot_path}")
 
-            # Step 6: Upload screenshot to Lark
+            # Step 6: Upload screenshot to Lark (optional)
             image_key = None
             if app_id and app_secret:
-                image_key = await upload_image_to_lark_async(
-                    screenshot_path, app_id, app_secret
-                )
+                try:
+                    image_key = await upload_image_to_lark_simple(
+                        screenshot_path, app_id, app_secret
+                    )
+                except Exception as e:
+                    print(f"  ⚠ Image upload failed (continuing without image): {e}")
+                    image_key = None
 
             # Step 7: Send notification
             import requests
@@ -269,11 +273,10 @@ async def main() -> int:
     return 0
 
 
-async def upload_image_to_lark_async(image_path: str, app_id: str, app_secret: str) -> str:
-    """Upload image to Lark IM API - async version."""
-    import lark_oapi
-    from lark_oapi.im.v1.model.create_image_request import CreateImageRequest
-    from lark_oapi.im.v1.model.create_image_request_body import CreateImageRequestBody
+async def upload_image_to_lark_simple(image_path: str, app_id: str, app_secret: str) -> str:
+    """Upload image to Lark using HTTP requests (simple version)."""
+    import requests
+    import io
 
     # Get access token
     token = await get_lark_access_token_async(app_id, app_secret)
@@ -289,25 +292,35 @@ async def upload_image_to_lark_async(image_path: str, app_id: str, app_secret: s
 
     image_content = image_file.read_bytes()
 
-    # Build request
-    request = CreateImageRequest.builder().request_body(
-        CreateImageRequestBody.builder()
-            .image_type("message")
-            .image(image_content=image_content)
-            .build()
-    ).build()
+    # Upload image using HTTP
+    url = "https://open.feishu.cn/open-apis/im/v1/images"
+    headers = {
+        "Authorization": f"Bearer {token}",
+    }
 
-    # Upload
-    client = lark_oapi.Client.builder().app_id(app_id).app_secret(app_secret).build()
-    response = await client.im.v1.image.create(request)
+    files = {
+        "image": ("screenshot.png", io.BytesIO(image_content), "image/png")
+    }
 
-    if response.code != 0:
-        print(f"Upload error: code={response.code}, msg={response.msg}")
+    data = {
+        "image_type": "message"
+    }
+
+    response = requests.post(url, headers=headers, files=files, data=data, timeout=30)
+
+    if response.status_code != 200:
+        print(f"Upload failed: status={response.status_code}, response={response.text[:200]}")
         return None
 
-    if response.data and hasattr(response.data, 'image_key'):
-        print(f"✓ Image uploaded: {response.data.image_key}")
-        return response.data.image_key
+    result = response.json()
+    if result.get("code") != 0:
+        print(f"Upload error: code={result.get('code')}, msg={result.get('msg')}")
+        return None
+
+    image_key = result.get("data", {}).get("image_key")
+    if image_key:
+        print(f"✓ Image uploaded: {image_key}")
+        return image_key
 
     return None
 
