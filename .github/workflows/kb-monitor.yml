@@ -20,6 +20,8 @@ jobs:
       # 1. 检出代码
       - name: Checkout code
         uses: actions/checkout@v4
+      - name: Purge cache
+        run: echo "Purging build cache..." uses: actions/checkout@v4uses: actions/checkout@v4 rm -rf ${{ runner.tool_cache }}
       
       # 2. 安装 Playwright 系统依赖
       - name: Install system dependencies
@@ -100,7 +102,7 @@ jobs:
           KB_USERNAME: $ secrets.KB_USERNAME 
           KB_PASSWORD: $ secrets.KB_PASSWORD }
         run: |
-          python src/main.py
+          python monitor_actions.py
       
       # 10. 上传截图作为 Artifact（保留 30 天）
       - name: Upload screenshots
