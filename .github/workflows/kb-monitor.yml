@@ -82,11 +82,11 @@ jobs:
           name: screenshots
           path: screenshots/
           retention-days: 7
-          
+
       # 9. 上传日志
       - name: Upload logs
         if: always()
-        uses: actions/upload-artifact@4
+        uses: actions/upload-artifact@v4
         with:
           name: logs
           path: logs/
