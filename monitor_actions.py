@@ -94,10 +94,11 @@ async def main() -> int:
             print(f"\n[Step 3] Scanning for KB files...")
 
             selectors_to_try = [
-                ('tbody tr', 'Table body rows'),
+                ('.mantine-Table-tbody tr', 'Mantine Table body rows'),
+                ('[class*="mantine-Table-tbody"] tr', 'Mantine Table body (variant)'),
+                ('tbody tr', 'Standard table body rows'),
                 ('table tr', 'All table rows'),
                 ('[role="row"]', 'ARIA rows'),
-                ('tr', 'All row elements'),
             ]
 
             total_items = 0
