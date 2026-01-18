@@ -5,7 +5,7 @@ import asyncio
 import os
 import sys
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 # Add src directory to path
 sys.path.insert(0, '/home/runner/work/chatbot-kb-monitor/chatbot_kb_monitor/src')
@@ -39,6 +39,12 @@ async def main() -> int:
     print(f"Lark App configured: {'YES' if app_id else 'NO'}")
     print(f"Direct KB URL: {direct_kb_url[:50]}..." if direct_kb_url else "Direct KB URL: Not set")
     print("=" * 60)
+
+    # Helper function to get Japan time
+    def get_japan_time() -> datetime:
+        """Get current time in Japan timezone (UTC+9)."""
+        japan_tz = timezone(timedelta(hours=9))
+        return datetime.now(japan_tz)
 
     # Import here (after path is set)
     try:
@@ -160,7 +166,7 @@ async def main() -> int:
 
                 error_msg = f"""⚠️ KB Monitor Failed
 
-**Time**: {datetime.now().strftime('%Y-%m-%d %H:%M')} (Asia/Tokyo)
+**Time**: {get_japan_time().strftime('%Y-%m-%d %H:%M')} (Asia/Tokyo)
 
 **Error**: No KB files found on page
 
@@ -181,7 +187,7 @@ async def main() -> int:
             print(f"\n[Step 4] SCAN COMPLETE: {total_items} total items, {failed_count} failures")
 
             # Step 5: Take screenshot
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = get_japan_time().strftime("%Y%m%d_%H%M%S")
             screenshot_path = f"screenshots/status_{timestamp}.png"
             os.makedirs("screenshots", exist_ok=True)
 
@@ -192,7 +198,7 @@ async def main() -> int:
             image_key = None
             if app_id and app_secret:
                 try:
-                    image_key = await upload_image_to_lark_simple(
+                    image_key = await upload_image_to_lark_sdk(
                         screenshot_path, app_id, app_secret
                     )
                 except Exception as e:
@@ -217,7 +223,7 @@ async def main() -> int:
                             "tag": "div",
                             "text": {
                                 "tag": "lark_md",
-                                "content": f"""**Time**: {datetime.now().strftime('%Y-%m-%d %H:%M')} (Asia/Tokyo)
+                                "content": f"""**Time**: {get_japan_time().strftime('%Y-%m-%d %H:%M')} (Asia/Tokyo)
 
 **Summary**:
 • Total Items: {total_items}
@@ -258,7 +264,7 @@ async def main() -> int:
 
         error_msg = f"""⚠️ KB Monitor Error
 
-**Time**: {datetime.now().strftime('%Y-%m-%d %H:%M')} (Asia/Tokyo)
+**Time**: {get_japan_time().strftime('%Y-%m-%d %H:%M')} (Asia/Tokyo)
 
 **Error**: {str(e)}
 
@@ -273,16 +279,12 @@ async def main() -> int:
     return 0
 
 
-async def upload_image_to_lark_simple(image_path: str, app_id: str, app_secret: str) -> str:
-    """Upload image to Lark using HTTP requests (simple version)."""
-    import requests
-    import io
-
-    # Get access token
-    token = await get_lark_access_token_async(app_id, app_secret)
-    if not token:
-        print("Failed to get access token")
-        return None
+async def upload_image_to_lark_sdk(image_path: str, app_id: str, app_secret: str) -> str:
+    """Upload image to Lark using official SDK (same as local script)."""
+    # Use correct import path
+    from lark_oapi.api.im.v1.model.create_image_request import CreateImageRequest
+    from lark_oapi.api.im.v1.model.create_image_request_body import CreateImageRequestBody
+    import lark_oapi
 
     # Read image
     image_file = Path(image_path)
@@ -290,39 +292,56 @@ async def upload_image_to_lark_simple(image_path: str, app_id: str, app_secret: 
         print(f"Image not found: {image_path}")
         return None
 
-    image_content = image_file.read_bytes()
+    try:
+        print(f"Uploading image using Lark SDK...")
 
-    # Upload image using HTTP
-    url = "https://open.feishu.cn/open-apis/im/v1/images"
-    headers = {
-        "Authorization": f"Bearer {token}",
-    }
+        # Create image upload request
+        request = (
+            CreateImageRequest.builder()
+            .request_body(
+                CreateImageRequestBody.builder()
+                .image_type("message")  # for use in message cards
+                .build()
+            )
+            .build()
+        )
 
-    files = {
-        "image": ("screenshot.png", io.BytesIO(image_content), "image/png")
-    }
+        # Open file and attach to request body
+        with open(image_file, 'rb') as f:
+            request.body.image = f
 
-    data = {
-        "image_type": "message"
-    }
+            # Get client using app credentials
+            client = (
+                lark_oapi.Client.builder()
+                .app_id(app_id)
+                .app_secret(app_secret)
+                .build()
+            )
 
-    response = requests.post(url, headers=headers, files=files, data=data, timeout=30)
+            # Call the API
+            response = client.im.v1.image.create(request)
 
-    if response.status_code != 200:
-        print(f"Upload failed: status={response.status_code}, response={response.text[:200]}")
-        return None
+        # Handle response
+        if response.code != 0:
+            print(f"Lark API error: code={response.code}, msg={response.msg}")
+            return None
 
-    result = response.json()
-    if result.get("code") != 0:
-        print(f"Upload error: code={result.get('code')}, msg={result.get('msg')}")
-        return None
+        if not response.data or not hasattr(response.data, 'image_key'):
+            print("No image_key in response")
+            return None
 
-    image_key = result.get("data", {}).get("image_key")
-    if image_key:
+        image_key = response.data.image_key
         print(f"✓ Image uploaded: {image_key}")
         return image_key
 
-    return None
+    except ImportError as e:
+        print(f"lark-oapi SDK import error: {e}")
+        return None
+    except Exception as e:
+        print(f"Upload error: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
 
 
 async def get_lark_access_token_async(app_id: str, app_secret: str) -> str:
