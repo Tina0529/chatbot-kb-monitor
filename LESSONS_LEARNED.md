@@ -268,6 +268,360 @@ with open(image_file, 'rb') as f:
 
 ---
 
+## GitHub Actions Workflow 操作指南
+
+### 快速开始
+
+为其他项目设置 GitHub Actions 时，按照以下步骤操作：
+
+### 1. 创建 Workflow 文件
+
+在项目根目录创建 `.github/workflows/` 目录结构：
+
+```bash
+mkdir -p .github/workflows
+```
+
+创建 workflow YAML 文件（如 `my-task.yml`）：
+
+```yaml
+name: My Task  # workflow 名称
+
+on:
+  # 定时触发
+  schedule:
+    - cron: '0 9 * * *'  # 每天 UTC 9:00
+
+  # 手动触发
+  workflow_dispatch:
+
+jobs:
+  my-job:
+    name: My Job
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. 检出代码
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 2. 设置 Python
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      # 3. 安装依赖
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      # 4. 运行脚本
+      - name: Run my script
+        env:
+          MY_SECRET: ${{ secrets.MY_SECRET }}
+        run: |
+          python my_script.py
+```
+
+### 2. 设置 Secrets（敏感信息）
+
+**步骤：**
+
+1. 打开 GitHub 仓库页面
+2. 点击 **Settings** → **Secrets and variables** → **Actions**
+3. 点击 **New repository secret**
+4. 添加所需的密钥
+
+**常用 Secrets 类型：**
+
+| 类型 | 示例 | 说明 |
+|------|------|------|
+| 用户名/密码 | `USERNAME`, `PASSWORD` | 登录凭据 |
+| API Key | `API_KEY`, `TOKEN` | 第三方 API 访问 |
+| Webhook URL | `WEBHOOK_URL` | 通知回调 |
+| App ID/Secret | `APP_ID`, `APP_SECRET` | 应用认证 |
+
+**在 Workflow 中使用：**
+
+```yaml
+env:
+  USERNAME: ${{ secrets.USERNAME }}
+  PASSWORD: ${{ secrets.PASSWORD }}
+```
+
+或直接在步骤中引用：
+
+```yaml
+- name: Run script
+  run: python script.py --token ${{ secrets.MY_TOKEN }}
+```
+
+### 3. Cron 表达式说明
+
+**格式：** `分钟 小时 日期 月份 星期`
+
+**常用示例：**
+
+| Cron 表达式 | UTC 时间 | 日本时间 | 说明 |
+|------------|---------|---------|------|
+| `0 0 * * *` | 00:00 | 09:00 | 每天 9 点 |
+| `20 0 * * *` | 00:20 | 09:20 | 每天 9:20 |
+| `0 1 * * *` | 01:00 | 10:00 | 每天 10 点 |
+| `0 */6 * * *` | 每 6 小时 | 每 6 小时 | 每 6 小时一次 |
+| `0 9 * * 1-5` | 09:00 | 18:00 | 工作日 18 点 |
+| `0 0 * * 0` | 00:00 | 09:00 | 每周日 9 点 |
+
+**时区转换公式：**
+```
+日本时间 (JST) = UTC 时间 + 9 小时
+UTC 时间 = 日本时间 - 9 小时
+```
+
+**提前调度（应对队列延迟）：**
+```yaml
+# 希望日本时间 9:00 执行，考虑 30 分钟延迟
+schedule:
+  - cron: '30 23 * * *'  # UTC 23:30 = JST 08:30
+```
+
+### 4. 手动触发 Workflow
+
+**方法 1：通过网页**
+1. 访问 `https://github.com/用户名/仓库名/actions`
+2. 点击左侧的 workflow 名称
+3. 点击右侧 **"Run workflow"** 按钮
+4. 选择分支（通常是 `master` 或 `main`）
+5. 如果有输入参数，设置后点击 **"Run workflow"**
+
+**方法 2：通过 GitHub CLI**
+```bash
+gh workflow run "My Task"
+```
+
+### 5. 常用 Workflow 配置
+
+#### 5.1 设置超时时间
+
+```yaml
+jobs:
+  my-job:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30  # 30 分钟后超时
+```
+
+#### 5.2 条件执行
+
+```yaml
+# 只在主分支运行
+if: github.ref == 'refs/heads/main'
+
+# 只在手动触发时运行
+if: github.event_name == 'workflow_dispatch'
+
+# 只在 Push 时运行
+if: github.event_name == 'push'
+```
+
+#### 5.3 矩阵策略（多版本测试）
+
+```yaml
+strategy:
+  matrix:
+    python-version: ['3.9', '3.10', '3.11']
+    os: [ubuntu-latest, windows-latest]
+
+steps:
+  - uses: actions/setup-python@v4
+    with:
+      python-version: ${{ matrix.python-version }}
+```
+
+#### 5.4 缓存依赖（加速构建）
+
+```yaml
+- name: Cache pip packages
+  uses: actions/cache@v3
+  with:
+    path: ~/.cache/pip
+    key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+```
+
+#### 5.5 上传 Artifact（保存输出）
+
+```yaml
+# 保存文件
+- name: Upload artifacts
+  uses: actions/upload-artifact@v4
+  with:
+    name: my-output
+    path: output/
+    retention-days: 7  # 保留 7 天
+
+# 失败时也保存
+- name: Upload logs on failure
+  if: failure()
+  uses: actions/upload-artifact@v4
+  with:
+    name: logs
+    path: logs/
+```
+
+### 6. Python 项目常用配置
+
+#### 6.1 安装系统依赖
+
+```yaml
+- name: Install system dependencies
+  run: |
+    sudo apt-get update
+    sudo apt-get install -y \
+      libnss3 \
+      libnspr4 \
+      libatk1.0-0 \
+      libatk-bridge2.0-0 \
+      libcups2 \
+      fonts-liberation \
+      fonts-noto-cjk  # CJK 字体
+```
+
+#### 6.2 安装 Playwright
+
+```yaml
+- name: Install Playwright
+  run: |
+    pip install playwright
+    playwright install chromium
+```
+
+#### 6.3 使用虚拟环境
+
+```yaml
+- name: Set up virtual environment
+  run: |
+    python -m venv venv
+    source venv/bin/activate
+    pip install -r requirements.txt
+
+- name: Run script
+  run: |
+    source venv/bin/activate
+    python my_script.py
+```
+
+### 7. 调试技巧
+
+#### 7.1 启用调试日志
+
+```yaml
+- name: Run script with debug
+  env:
+    DEBUG: "true"
+  run: python my_script.py
+```
+
+#### 7.2 使用 tmate 进行交互式调试
+
+```yaml
+- name: Setup tmate session
+  if: failure()
+  uses: mxschmitt/action-tmate@v3
+  timeout-minutes: 30
+```
+
+#### 7.3 查看 Workflow 日志
+
+1. 访问 Actions 页面
+2. 点击具体的 workflow 运行
+3. 点击 job 名称
+4. 展开步骤查看详细日志
+
+### 8. Workflow 模板
+
+#### 8.1 简单定时任务
+
+```yaml
+name: Scheduled Task
+
+on:
+  schedule:
+    - cron: '0 0 * * *'  # 每天 UTC 0:00
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      - run: pip install -r requirements.txt
+      - run: python script.py
+```
+
+#### 8.2 带重试的任务
+
+```yaml
+name: Task with Retry
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run with retry
+        uses: nick-fields/retry@v2
+        with:
+          timeout_minutes: 10
+          max_attempts: 3
+          command: python script.py
+```
+
+#### 8.3 多环境配置
+
+```yaml
+name: Multi-Environment
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment'
+        required: true
+        type: choice
+        options:
+          - dev
+          - staging
+          - production
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to ${{ github.event.inputs.environment }}
+        run: |
+          echo "Deploying to ${{ github.event.inputs.environment }}"
+          # 部署命令
+```
+
+### 9. 常见问题
+
+| 问题 | 解决方案 |
+|------|---------|
+| **Workflow 不触发** | 检查 cron 语法，确认文件在 `.github/workflows/` 目录 |
+| **Secrets 读取失败** | 确认 Secret 名称正确，区分大小写 |
+| **超时错误** | 增加 `timeout-minutes` 或优化脚本性能 |
+| **权限错误** | 在 workflow 中添加 `permissions` 配置 |
+| **找不到文件** | 确认使用 `actions/checkout@v4` 检出代码 |
+
+---
+
 ## 有用的资源
 
 ### Mantine UI
@@ -294,3 +648,4 @@ with open(image_file, 'rb') as f:
 |------|---------|
 | 2026-01-18 | 初始版本 - 记录部署过程中遇到的问题和解决方案 |
 | 2026-01-19 | 添加 GitHub Actions 队列延迟问题说明 |
+| 2026-01-19 | 添加完整的 GitHub Actions Workflow 操作指南 |
