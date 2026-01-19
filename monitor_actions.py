@@ -38,6 +38,13 @@ async def main() -> int:
     print(f"Webhook configured: {'YES' if webhook_url else 'NO'}")
     print(f"Lark App configured: {'YES' if app_id else 'NO'}")
     print(f"Direct KB URL: {direct_kb_url[:50]}..." if direct_kb_url else "Direct KB URL: Not set")
+
+    # Debug: Show runner's system time
+    import time as time_module
+    runner_utc = datetime.now(timezone.utc)
+    runner_jp = runner_utc.astimezone(timezone(timedelta(hours=9)))
+    print(f"Runner UTC time: {runner_utc.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Runner JP time:  {runner_jp.strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 60)
 
     # Helper function to get Japan time
