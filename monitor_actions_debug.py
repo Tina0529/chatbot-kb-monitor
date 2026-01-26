@@ -48,8 +48,40 @@ async def main() -> int:
                 except:
                     continue
 
-            await asyncio.sleep(5)
-            print(f"  Current URL after login: {page.url}")
+            # Wait for Auth0 redirect - may take longer than expected
+            print("  Waiting for login to complete (checking for redirect)...")
+            max_wait_time = 30  # seconds
+            check_interval = 2
+            elapsed = 0
+            login_success = False
+
+            initial_url = page.url
+            print(f"  Initial URL after clicking login: {page.url[:80]}")
+
+            while elapsed < max_wait_time:
+                await asyncio.sleep(check_interval)
+                elapsed += check_interval
+
+                current_url = page.url
+                print(f"  [{elapsed}s] Current URL: {current_url[:80]}")
+
+                # Check if we're no longer on login page
+                if "/login" not in current_url and "auth0.com" not in current_url:
+                    print(f"  ✓ Login completed! Redirected to: {current_url[:80]}")
+                    login_success = True
+                    break
+
+                # If URL changed from initial, we're making progress
+                if current_url != initial_url:
+                    print(f"  ... URL changed, redirect in progress ...")
+                    initial_url = current_url
+
+            # If still on login/Auth0 page, try navigating to base URL directly
+            if not login_success or "/login" in page.url or "auth0.com" in page.url:
+                print("  ⚠ Login redirect may not have completed, trying direct navigation...")
+                await page.goto(base_url, wait_until="load", timeout=60000)
+                await asyncio.sleep(5)
+                print(f"  After direct nav: {page.url[:80]}")
 
             # Step 2: Navigate to KB page
             print(f"\n[Step 2] Navigating to KB page...")
