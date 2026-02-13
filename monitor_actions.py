@@ -168,11 +168,12 @@ async def main() -> int:
                         for i, row in enumerate(rows):
                             try:
                                 row_text = await row.inner_text()
+                                row_text_lower = row_text.lower()
 
-                                # Check for failure indicators
+                                # Check for failure indicators (case-insensitive)
                                 is_failed = False
                                 for indicator in failure_indicators:
-                                    if indicator in row_text:
+                                    if indicator in row_text_lower:
                                         is_failed = True
                                         break
 
@@ -554,8 +555,9 @@ async def retry_failed_items(page, failed_rows: list, table_selector: str) -> li
                     check_row = rows_after[row_index]
                     row_text = await check_row.inner_text()
 
-                    # Check if still has failure indicators
-                    still_failed = any(indicator in row_text for indicator in failure_indicators)
+                    # Check if still has failure indicators (case-insensitive)
+                    row_text_lower = row_text.lower()
+                    still_failed = any(indicator in row_text_lower for indicator in failure_indicators)
 
                     if not still_failed:
                         print(f"SUCCESS! ✓")

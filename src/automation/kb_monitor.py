@@ -176,13 +176,14 @@ class KBMonitor:
                 try:
                     # Get the full text content of this row
                     row_text = await row.inner_text()
+                    row_text_lower = row_text.lower()
 
-                    # Check if any failure indicator is in this row
+                    # Check if any failure indicator is in this row (case-insensitive)
                     has_failure = False
                     matched_indicator = None
 
                     for indicator in self.config.monitoring.failure_indicators:
-                        if indicator in row_text:
+                        if indicator in row_text_lower:
                             has_failure = True
                             matched_indicator = indicator
                             break
