@@ -22,6 +22,7 @@ monitoring:
     - "エラー"
     - "error"
     - "failed"
+    - "waiting"
 
   # Retry settings
   retry:

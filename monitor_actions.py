@@ -163,7 +163,7 @@ async def main() -> int:
                         used_selector = selector
 
                         # Scan for failures and store row elements
-                        failure_indicators = ["失敗", "エラー", "error", "failed"]
+                        failure_indicators = ["失敗", "エラー", "error", "failed", "waiting"]
 
                         for i, row in enumerate(rows):
                             try:
@@ -463,7 +463,7 @@ async def retry_failed_items(page, failed_rows: list, table_selector: str) -> li
         List of retry results with file_name, attempts, final_status
     """
     results = []
-    failure_indicators = ["失敗", "エラー", "error", "failed"]
+    failure_indicators = ["失敗", "エラー", "error", "failed", "waiting"]
     MAX_RETRIES = 3
 
     for item in failed_rows:
