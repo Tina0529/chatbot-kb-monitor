@@ -263,12 +263,18 @@ async def main() -> int:
                 retry_results = await retry_failed_items(page, failed_rows, used_selector)
 
             # Step 5: Take screenshot
+            # Expand viewport to fit all table rows so nothing is clipped
+            print(f"\n[Step 5] Taking screenshot...")
+            content_height = await page.evaluate("() => document.documentElement.scrollHeight")
+            await page.set_viewport_size({"width": 1280, "height": max(content_height, 1080)})
+            await asyncio.sleep(1)
+
             timestamp = get_japan_time().strftime("%Y%m%d_%H%M%S")
             screenshot_path = f"screenshots/status_{timestamp}.png"
             os.makedirs("screenshots", exist_ok=True)
 
             await page.screenshot(path=screenshot_path, full_page=True)
-            print(f"Screenshot saved: {screenshot_path}")
+            print(f"  Screenshot saved: {screenshot_path} (viewport height: {max(content_height, 1080)}px)")
 
             # Step 6: Upload screenshot to Lark (optional)
             image_key = None
