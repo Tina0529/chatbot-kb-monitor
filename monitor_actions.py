@@ -67,9 +67,27 @@ async def main() -> int:
             await page.goto(base_url, wait_until="load", timeout=60000)
             await asyncio.sleep(2)
 
-            # Fill credentials
+            # Fill credentials (login page uses placeholder attrs, not name attrs)
             print("  Filling credentials...")
-            await page.fill('input[name="username"]', username)
+            username_selectors = [
+                'input[name="username"]',
+                'input[placeholder*="アカウント"]',
+                'input[type="text"]',
+            ]
+            filled = False
+            for sel in username_selectors:
+                try:
+                    if await page.locator(sel).count() > 0:
+                        await page.fill(sel, username)
+                        print(f"  ✓ Username filled using: {sel}")
+                        filled = True
+                        break
+                except:
+                    continue
+            if not filled:
+                print("  ERROR: Could not find username input")
+                return 1
+
             await page.fill('input[type="password"]', password)
 
             # Click login button (try multiple selectors)

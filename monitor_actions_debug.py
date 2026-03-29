@@ -36,7 +36,15 @@ async def main() -> int:
             await page.goto(base_url, wait_until="load", timeout=60000)
             await asyncio.sleep(2)
 
-            await page.fill('input[name="username"]', username)
+            # Login page uses placeholder attrs, not name attrs
+            for sel in ['input[name="username"]', 'input[placeholder*="アカウント"]', 'input[type="text"]']:
+                try:
+                    if await page.locator(sel).count() > 0:
+                        await page.fill(sel, username)
+                        print(f"  ✓ Username filled using: {sel}")
+                        break
+                except:
+                    continue
             await page.fill('input[type="password"]', password)
 
             for selector in ['button[type="submit"]', 'button:has-text("ログイン")']:
