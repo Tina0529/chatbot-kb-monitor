@@ -112,11 +112,65 @@ async def main() -> int:
             # Step 1: Login (same flow as monitor_actions.py)
             print(f"[Step 1] Logging in to {base_url}")
             await page.goto(base_url, wait_until="load", timeout=60000)
-            await asyncio.sleep(2)
+            await asyncio.sleep(3)
+
+            # Diagnostic: snapshot the login page before attempting fill
+            os.makedirs("screenshots", exist_ok=True)
+            try:
+                pre_login_path = "screenshots/00_pre_login.png"
+                await page.screenshot(path=pre_login_path, full_page=True)
+                print(f"  [diag] Login page URL: {page.url}")
+                print(f"  [diag] Login page title: {await page.title()}")
+                print(f"  [diag] Pre-login screenshot: {pre_login_path}")
+
+                # Show which input-like elements exist on the page
+                inputs_info = await page.evaluate("""
+                    () => Array.from(document.querySelectorAll('input')).map(el => ({
+                        name: el.name, type: el.type, id: el.id,
+                        placeholder: el.placeholder, autocomplete: el.autocomplete
+                    }))
+                """)
+                print(f"  [diag] Inputs on page: {inputs_info}")
+            except Exception as e:
+                print(f"  [diag] Could not capture diagnostics: {e}")
 
             print("  Filling credentials...")
-            await page.fill('input[name="username"]', username)
-            await page.fill('input[type="password"]', password)
+            # Wait explicitly for the username field with multiple fallback selectors
+            username_selectors = [
+                'input[name="username"]',
+                'input[type="email"]',
+                'input[id="username"]',
+                'input[autocomplete="username"]',
+            ]
+            username_filled = False
+            for sel in username_selectors:
+                try:
+                    await page.wait_for_selector(sel, timeout=10000, state="visible")
+                    await page.fill(sel, username)
+                    print(f"  ✓ Filled username using: {sel}")
+                    username_filled = True
+                    break
+                except Exception as e:
+                    print(f"  ✗ Selector '{sel}' didn't work: {str(e)[:80]}")
+                    continue
+
+            if not username_filled:
+                err_screenshot = "screenshots/01_no_username_field.png"
+                await page.screenshot(path=err_screenshot, full_page=True)
+                raise RuntimeError(f"Could not find username input field. See {err_screenshot}")
+
+            password_selectors = [
+                'input[type="password"]',
+                'input[name="password"]',
+                'input[autocomplete="current-password"]',
+            ]
+            for sel in password_selectors:
+                try:
+                    await page.fill(sel, password)
+                    print(f"  ✓ Filled password using: {sel}")
+                    break
+                except Exception:
+                    continue
 
             print("  Clicking login button...")
             login_clicked = False
