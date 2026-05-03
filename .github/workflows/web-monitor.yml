@@ -1,0 +1,88 @@
+name: Website Monitor
+
+on:
+  # 定时触发 - 每天 UTC 01:40 = 日本时间 10:40
+  # （Web Connector の学習が 10:30 に完了する想定で 10 分マージンを取る）
+  schedule:
+    - cron: '40 1 * * *'
+
+  # 手动触发
+  workflow_dispatch:
+
+jobs:
+  monitor:
+    name: Monitor Website Connector Status
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libnss3 \
+            libnspr4 \
+            libatk1.0-0 \
+            libatk-bridge2.0-0 \
+            libcups2 \
+            libdrm2 \
+            libxkbcommon0 \
+            libxcomposite1 \
+            libxdamage1 \
+            libxfixes3 \
+            libxrandr2 \
+            libgbm1 \
+            libasound2t64 \
+            fonts-liberation \
+            fonts-noto-cjk \
+            fonts-noto-cjk-extra
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Install Playwright
+        run: |
+          pip install playwright
+          playwright install chromium
+
+      - name: Create directories
+        run: |
+          mkdir -p logs
+          mkdir -p screenshots
+
+      - name: Run Website Monitor
+        env:
+          DIRECT_WEB_URL: ${{ secrets.DIRECT_WEB_URL }}
+          KB_USERNAME: ${{ secrets.KB_USERNAME }}
+          KB_PASSWORD: ${{ secrets.KB_PASSWORD }}
+          LARK_WEBHOOK_URL: ${{ secrets.LARK_WEBHOOK_URL }}
+          LARK_APP_ID: ${{ secrets.LARK_APP_ID }}
+          LARK_APP_SECRET: ${{ secrets.LARK_APP_SECRET }}
+        run: |
+          python monitor_actions_web.py
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-screenshots
+          path: screenshots/
+          retention-days: 7
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-logs
+          path: logs/
+          retention-days: 7
