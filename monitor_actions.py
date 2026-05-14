@@ -149,9 +149,30 @@ async def main() -> int:
                 print("  ERROR: DIRECT_KB_URL must be set")
                 return 1
 
-            await page.goto(direct_kb_url, wait_until="load", timeout=60000)
-            await asyncio.sleep(5)  # Wait for dynamic content
+            await page.goto(direct_kb_url, wait_until="networkidle", timeout=60000)
             print(f"  ✓ Current URL: {page.url[:80]}")
+
+            # Wait for table rows to actually render (SPA loads data asynchronously)
+            # Fall through after timeout — Step 3 will still scan and produce a precise diagnosis
+            print("  Waiting for table rows to render...")
+            row_wait_selectors = [
+                '.mantine-Table-tbody tr',
+                '[class*="mantine-Table-tbody"] tr',
+                'tbody tr',
+                'table tr',
+                '[role="row"]',
+            ]
+            row_appeared = False
+            for wait_sel in row_wait_selectors:
+                try:
+                    await page.wait_for_selector(wait_sel, timeout=30000, state="attached")
+                    print(f"  ✓ Rows rendered (matched: {wait_sel})")
+                    row_appeared = True
+                    break
+                except Exception:
+                    continue
+            if not row_appeared:
+                print("  ⚠ No table rows appeared within 30s — page may be empty or stuck loading")
 
             # Step 3: Scan for KB files using multiple selectors
             print(f"\n[Step 3] Scanning for KB files...")
@@ -226,12 +247,48 @@ async def main() -> int:
 
             if not files_found or total_items == 0:
                 print("\nERROR: No KB files found on page!")
-                print("Possible reasons:")
-                print("  1. DIRECT_KB_URL is incorrect")
-                print("  2. Login failed or session expired")
-                print("  3. Page structure has changed")
 
-                # Send error notification
+                # Distinguish "empty dataset" from "page never loaded"
+                empty_state_phrases = [
+                    "no data", "no results", "no records", "no files",
+                    "暂无数据", "暂无", "无数据", "空", "未找到",
+                    "データがありません", "データなし", "該当なし", "ありません",
+                ]
+                page_body_text = ""
+                empty_state_detected = False
+                try:
+                    page_body_text = await page.locator("body").inner_text()
+                    body_lower = page_body_text.lower()
+                    for phrase in empty_state_phrases:
+                        if phrase.lower() in body_lower:
+                            empty_state_detected = True
+                            print(f"  Detected empty-state indicator: '{phrase}'")
+                            break
+                except Exception as e:
+                    print(f"  Could not read page body: {e}")
+
+                diagnosis = "Dataset appears empty (empty-state text detected)" if empty_state_detected \
+                    else "Page never rendered table rows (likely timing/loading issue)"
+                print(f"  Diagnosis: {diagnosis}")
+
+                # Save screenshot + HTML for post-mortem diagnosis
+                os.makedirs("screenshots", exist_ok=True)
+                debug_ts = get_japan_time().strftime("%Y%m%d_%H%M%S")
+                fail_screenshot = f"screenshots/failure_{debug_ts}.png"
+                fail_html = f"screenshots/failure_{debug_ts}.html"
+                try:
+                    await page.screenshot(path=fail_screenshot, full_page=True)
+                    print(f"  Failure screenshot saved: {fail_screenshot}")
+                except Exception as e:
+                    print(f"  Could not save screenshot: {e}")
+                try:
+                    html_content = await page.content()
+                    Path(fail_html).write_text(html_content, encoding="utf-8")
+                    print(f"  Failure HTML saved: {fail_html}")
+                except Exception as e:
+                    print(f"  Could not save HTML: {e}")
+
+                # Send error notification (with diagnosis)
                 import requests
 
                 error_msg = f"""⚠️ KB Monitor Failed
@@ -240,12 +297,11 @@ async def main() -> int:
 
 **Error**: No KB files found on page
 
+**Diagnosis**: {diagnosis}
+
 **URL**: {direct_kb_url[:80] if direct_kb_url else 'Not set'}...
 
-**Please check**:
-1. KB file path configuration (DIRECT_KB_URL)
-2. Login credentials
-3. Network connectivity
+**Debug artifacts**: screenshot + HTML uploaded to GitHub Actions run
 
 ---
 *This is an automated message*"""
