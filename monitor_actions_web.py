@@ -134,88 +134,122 @@ async def main() -> int:
             except Exception as e:
                 print(f"  [diag] Could not capture diagnostics: {e}")
 
-            print("  Filling credentials...")
-            # Wait explicitly for the username field with multiple fallback selectors
-            username_selectors = [
-                'input[name="username"]',
-                'input[type="email"]',
-                'input[id="username"]',
-                'input[autocomplete="username"]',
-            ]
-            username_filled = False
-            for sel in username_selectors:
-                try:
-                    await page.wait_for_selector(sel, timeout=10000, state="visible")
-                    await page.fill(sel, username)
-                    print(f"  ✓ Filled username using: {sel}")
-                    username_filled = True
-                    break
-                except Exception as e:
-                    print(f"  ✗ Selector '{sel}' didn't work: {str(e)[:80]}")
-                    continue
-
-            if not username_filled:
-                err_screenshot = "screenshots/01_no_username_field.png"
-                await page.screenshot(path=err_screenshot, full_page=True)
-                raise RuntimeError(f"Could not find username input field. See {err_screenshot}")
-
-            password_selectors = [
-                'input[type="password"]',
-                'input[name="password"]',
-                'input[autocomplete="current-password"]',
-            ]
-            for sel in password_selectors:
-                try:
-                    await page.fill(sel, password)
-                    print(f"  ✓ Filled password using: {sel}")
-                    break
-                except Exception:
-                    continue
-
-            print("  Clicking login button...")
-            login_clicked = False
-            for selector in ['button[type="submit"]', 'button:has-text("ログイン")', '.login-button']:
-                try:
-                    if await page.locator(selector).count() > 0:
-                        await page.locator(selector).first.click()
-                        login_clicked = True
-                        print(f"  ✓ Clicked login using: {selector}")
+            # Reusable login routine so we can retry if the session bounces back
+            # to the auth page (the most common cause of the misleading
+            # "No rows found" failure — the session simply wasn't authenticated).
+            async def fill_and_submit_login() -> bool:
+                print("  Filling credentials...")
+                # Login page renders: <input id="account" type="text"
+                # autocomplete="username"> + <input id="password" type="password">.
+                # Put the known-good selectors FIRST — the previous order tried
+                # name="username"/type=email/id=username first, each missing and
+                # burning a 10s timeout (~30s wasted) before reaching the real one.
+                username_selectors = [
+                    'input[autocomplete="username"]',
+                    'input#account',
+                    'input[name="username"]',
+                    'input[type="email"]',
+                    'input[type="text"]',
+                ]
+                username_filled = False
+                for sel in username_selectors:
+                    try:
+                        await page.wait_for_selector(sel, timeout=8000, state="visible")
+                        await page.fill(sel, username)
+                        print(f"  ✓ Filled username using: {sel}")
+                        username_filled = True
                         break
-                except Exception:
-                    continue
+                    except Exception as e:
+                        print(f"  ✗ Selector '{sel}' didn't work: {str(e)[:80]}")
+                        continue
+                if not username_filled:
+                    err_screenshot = "screenshots/01_no_username_field.png"
+                    await page.screenshot(path=err_screenshot, full_page=True)
+                    raise RuntimeError(f"Could not find username input field. See {err_screenshot}")
 
-            if not login_clicked:
+                for sel in ['input[type="password"]', 'input[name="password"]',
+                            'input[autocomplete="current-password"]']:
+                    try:
+                        await page.fill(sel, password)
+                        print(f"  ✓ Filled password using: {sel}")
+                        break
+                    except Exception:
+                        continue
+
+                print("  Clicking login button...")
+                for selector in ['button[type="submit"]', 'button:has-text("ログイン")', '.login-button']:
+                    try:
+                        if await page.locator(selector).count() > 0:
+                            await page.locator(selector).first.click()
+                            print(f"  ✓ Clicked login using: {selector}")
+                            return True
+                    except Exception:
+                        continue
+                return False
+
+            async def wait_for_login(max_wait_time: int = 45) -> bool:
+                """Poll until we leave the /login (and Auth0) pages."""
+                elapsed = 0
+                while elapsed < max_wait_time:
+                    await asyncio.sleep(2)
+                    elapsed += 2
+                    current_url = page.url
+                    if "/login" not in current_url and "auth0.com" not in current_url:
+                        print(f"  ✓ Login completed: {current_url[:80]}")
+                        return True
+                print(f"  ⚠ Still on login page after {max_wait_time}s: {page.url[:80]}")
+                return False
+
+            if not await fill_and_submit_login():
                 print("  ERROR: Could not find login button")
                 return 1
-
             print("  Waiting for login to complete...")
-            max_wait_time = 30
-            elapsed = 0
-            initial_url = page.url
-            login_success = False
-            while elapsed < max_wait_time:
-                await asyncio.sleep(2)
-                elapsed += 2
-                current_url = page.url
-                if "/login" not in current_url and "auth0.com" not in current_url:
-                    print(f"  ✓ Login completed: {current_url[:80]}")
-                    login_success = True
-                    break
-                if current_url != initial_url:
-                    initial_url = current_url
+            await wait_for_login()
 
-            if not login_success or "/login" in page.url or "auth0.com" in page.url:
-                print("  ⚠ Trying direct navigation...")
-                await page.goto(base_url, wait_until="load", timeout=60000)
+            # Step 2: Navigate to web-connector page and verify authentication.
+            async def goto_web_connector() -> str:
+                print(f"\n[Step 2] Navigating to web-connector page...")
+                await page.goto(direct_url, wait_until="load", timeout=60000)
+                # The SPA may redirect an unauthenticated session back to /login,
+                # and renders the table asynchronously — give it a moment.
                 await asyncio.sleep(5)
+                print(f"  ✓ Current URL: {page.url[:80]}")
+                return page.url
 
-            # Step 2: Navigate to web-connector page
-            print(f"\n[Step 2] Navigating to web-connector page...")
-            await page.goto(direct_url, wait_until="load", timeout=60000)
-            await asyncio.sleep(5)
-            print(f"  ✓ Current URL: {page.url[:80]}")
+            current_url = await goto_web_connector()
+            # If we got bounced back to the auth page, the session isn't
+            # authenticated. Retry the login once before giving up.
+            if "/login" in current_url or "/auth" in current_url:
+                print("  ⚠ Bounced to auth page — session not authenticated. Retrying login once...")
+                await page.goto(base_url, wait_until="load", timeout=60000)
+                await asyncio.sleep(3)
+                if await fill_and_submit_login():
+                    await wait_for_login()
+                    current_url = await goto_web_connector()
 
-            # Step 3: Scan rows
+            if "/login" in current_url or "/auth" in current_url:
+                err = "Login failed — still redirected to the auth page"
+                print(f"\nERROR: {err}")
+                try:
+                    await page.screenshot(path="screenshots/02_login_failed.png", full_page=True)
+                except Exception:
+                    pass
+                error_msg = (
+                    f"⚠️ Website Monitor Failed\n\n"
+                    f"**Time**: {get_japan_time().strftime('%Y-%m-%d %H:%M')} (Asia/Tokyo)\n\n"
+                    f"**Error**: {err}\n\n"
+                    f"**URL**: {current_url[:80]}\n\n"
+                    f"**Please check**:\n"
+                    f"1. KB_USERNAME / KB_PASSWORD secrets\n"
+                    f"2. admin.gbase.ai login latency / availability\n\n"
+                    f"---\n*This is an automated message*"
+                )
+                requests.post(webhook_url, json={"msg_type": "text", "content": {"text": error_msg}}, timeout=10)
+                return 1
+
+            # Step 3: Scan rows. The table is rendered client-side after an async
+            # data fetch, so POLL for rows instead of reading the DOM once —
+            # locator().all() does not wait, so a single read races the render.
             print(f"\n[Step 3] Scanning website connector rows...")
             selectors_to_try = [
                 ('.mantine-Table-tbody tr', 'Mantine Table body rows'),
@@ -227,27 +261,37 @@ async def main() -> int:
 
             rows = []
             used_selector = None
-            for selector, description in selectors_to_try:
-                try:
-                    print(f"  Trying: {description} ({selector})")
-                    candidate = await page.locator(selector).all()
-                    if len(candidate) > 0:
-                        rows = candidate
-                        used_selector = selector
-                        print(f"  ✓ Found {len(rows)} rows using '{selector}'")
-                        break
-                except Exception as e:
-                    print(f"  Selector '{selector}' failed: {e}")
-                    continue
+            scan_deadline = 45  # seconds to wait for the table to render
+            waited = 0
+            while waited < scan_deadline and not rows:
+                for selector, description in selectors_to_try:
+                    try:
+                        candidate = await page.locator(selector).all()
+                        if len(candidate) > 0:
+                            rows = candidate
+                            used_selector = selector
+                            print(f"  ✓ Found {len(rows)} rows using '{selector}' (after {waited}s)")
+                            break
+                    except Exception as e:
+                        print(f"  Selector '{selector}' failed: {e}")
+                        continue
+                if rows:
+                    break
+                await asyncio.sleep(3)
+                waited += 3
 
             if not rows:
                 err = "No rows found on web-connector page"
                 print(f"\nERROR: {err}")
+                try:
+                    await page.screenshot(path="screenshots/03_no_rows.png", full_page=True)
+                except Exception:
+                    pass
                 error_msg = (
                     f"⚠️ Website Monitor Failed\n\n"
                     f"**Time**: {get_japan_time().strftime('%Y-%m-%d %H:%M')} (Asia/Tokyo)\n\n"
-                    f"**Error**: {err}\n\n"
-                    f"**URL**: {direct_url[:80]}\n\n"
+                    f"**Error**: {err} (waited {scan_deadline}s for table render)\n\n"
+                    f"**URL**: {page.url[:80]}\n\n"
                     f"**Please check**:\n"
                     f"1. DIRECT_WEB_URL secret is correct\n"
                     f"2. Login credentials\n"
