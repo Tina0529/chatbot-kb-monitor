@@ -21,25 +21,37 @@ from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
 
-# Status labels we expect in the "Last Refresh" cell
+# Canonical status labels and their per-locale aliases. The admin UI renders
+# in the account/browser language — English on CI, Japanese in some browsers —
+# so we match every known alias to stay locale-independent.
 STATUS_LABELS = ["Learned", "Learning", "Waiting", "Failed", "Unavailable"]
+STATUS_ALIASES = {
+    "Learned": ["Learned", "学習済み", "已学习", "已學習"],
+    "Learning": ["Learning", "学習中", "学习中", "學習中"],
+    "Waiting": ["Waiting", "待機中", "等待中", "等待"],
+    "Failed": ["Failed", "失敗", "失败"],
+    "Unavailable": ["Unavailable", "利用不可", "不可用"],
+}
+# "Completed" status cell, per locale.
+COMPLETED_ALIASES = ["completed", "完了", "已完成", "完成"]
 
 
 def parse_status_counts(text: str) -> dict:
     """Extract {Learned: N, Learning: N, ...} from a Last Refresh cell text.
 
-    The cell typically renders as:
-        Learned: 12
-        Learning: 0
-        Waiting: 0
-        Failed: 0
-        Unavailable: 0
-    Some locales use a full-width colon (：).
+    The cell renders one label per line, e.g. "Learned: 12" (English) or
+    "学習済み： 7" (Japanese). Both half-width (:) and full-width (：) colons
+    appear depending on locale.
     """
     counts = {}
     for label in STATUS_LABELS:
-        m = re.search(rf"{label}\s*[：:]\s*(\d+)", text)
-        counts[label] = int(m.group(1)) if m else None
+        value = None
+        for alias in STATUS_ALIASES[label]:
+            m = re.search(rf"{re.escape(alias)}\s*[：:]\s*(\d+)", text)
+            if m:
+                value = int(m.group(1))
+                break
+        counts[label] = value
     return counts
 
 
@@ -50,7 +62,8 @@ def is_row_healthy(status_text: str, counts: dict) -> bool:
     Learned is allowed to be any value (including 0 — some sources may
     legitimately have no content, but we still surface them via the report).
     """
-    if "completed" not in (status_text or "").lower():
+    st = (status_text or "").lower()
+    if not any(alias in st for alias in COMPLETED_ALIASES):
         return False
     for label in ["Learning", "Waiting", "Failed", "Unavailable"]:
         v = counts.get(label)
@@ -206,14 +219,44 @@ async def main() -> int:
             print("  Waiting for login to complete...")
             await wait_for_login()
 
-            # Step 2: Navigate to web-connector page and verify authentication.
+            # Step 2: Reach the web-connector page.
+            #
+            # IMPORTANT: do NOT hard-navigate (page.goto) straight to the deep
+            # dataset URL. Cold-booting the SPA at that deep route races the
+            # data-source list fetch against app/auth init, and the table
+            # frequently renders empty ("Add data source" empty state) — this is
+            # the real cause of the intermittent "No rows found" failures.
+            #
+            # Instead: hard-load a SHALLOW page (/bots) so the app boots once
+            # with auth, then client-side navigate (history.pushState + popstate)
+            # to the deep route. Verified reliable in a real browser; the deep
+            # hard-load was reproducibly empty.
+            from urllib.parse import urlparse
+            _pu = urlparse(direct_url)
+            spa_path = _pu.path or "/"
+            if _pu.query:
+                spa_path += "?" + _pu.query
+            if _pu.fragment:
+                spa_path += "#" + _pu.fragment
+
             async def goto_web_connector() -> str:
-                print(f"\n[Step 2] Navigating to web-connector page...")
-                await page.goto(direct_url, wait_until="load", timeout=60000)
-                # The SPA may redirect an unauthenticated session back to /login,
-                # and renders the table asynchronously — give it a moment.
-                await asyncio.sleep(5)
-                print(f"  ✓ Current URL: {page.url[:80]}")
+                print(f"\n[Step 2] Booting app on a shallow page, then client-side nav...")
+                await page.goto(f"{base_url}/bots", wait_until="load", timeout=60000)
+                await asyncio.sleep(4)  # let the SPA boot + hydrate auth
+                boot_url = page.url
+                print(f"  ✓ Booted on: {boot_url[:80]}")
+                if "/login" in boot_url or "/auth" in boot_url:
+                    return boot_url  # not authenticated — caller handles it
+                # Client-side route change into the deep dataset view.
+                await page.evaluate(
+                    """(p) => {
+                        window.history.pushState({}, '', p);
+                        window.dispatchEvent(new PopStateEvent('popstate'));
+                    }""",
+                    spa_path,
+                )
+                await asyncio.sleep(3)
+                print(f"  ✓ Navigated (client-side) to: {page.url[:80]}")
                 return page.url
 
             current_url = await goto_web_connector()
@@ -259,26 +302,30 @@ async def main() -> int:
                 ('[role="row"]', 'ARIA rows'),
             ]
 
-            rows = []
-            used_selector = None
-            scan_deadline = 45  # seconds to wait for the table to render
-            waited = 0
-            while waited < scan_deadline and not rows:
-                for selector, description in selectors_to_try:
-                    try:
-                        candidate = await page.locator(selector).all()
-                        if len(candidate) > 0:
-                            rows = candidate
-                            used_selector = selector
-                            print(f"  ✓ Found {len(rows)} rows using '{selector}' (after {waited}s)")
-                            break
-                    except Exception as e:
-                        print(f"  Selector '{selector}' failed: {e}")
-                        continue
-                if rows:
-                    break
-                await asyncio.sleep(3)
-                waited += 3
+            async def scan_once(poll_seconds: int = 30):
+                """Poll the DOM for table rows up to poll_seconds."""
+                waited = 0
+                while waited < poll_seconds:
+                    for selector, _desc in selectors_to_try:
+                        try:
+                            candidate = await page.locator(selector).all()
+                            if len(candidate) > 0:
+                                print(f"  ✓ Found {len(candidate)} rows using '{selector}' (after {waited}s)")
+                                return candidate, selector
+                        except Exception as e:
+                            print(f"  Selector '{selector}' failed: {e}")
+                            continue
+                    await asyncio.sleep(3)
+                    waited += 3
+                return [], None
+
+            # Up to 2 attempts: if the table renders empty (the known cold-load
+            # race), re-trigger the client-side navigation and poll again.
+            rows, used_selector = await scan_once(poll_seconds=30)
+            if not rows:
+                print("  ⚠ No rows yet — re-navigating (client-side) and retrying...")
+                await goto_web_connector()
+                rows, used_selector = await scan_once(poll_seconds=30)
 
             if not rows:
                 err = "No rows found on web-connector page"
@@ -290,7 +337,7 @@ async def main() -> int:
                 error_msg = (
                     f"⚠️ Website Monitor Failed\n\n"
                     f"**Time**: {get_japan_time().strftime('%Y-%m-%d %H:%M')} (Asia/Tokyo)\n\n"
-                    f"**Error**: {err} (waited {scan_deadline}s for table render)\n\n"
+                    f"**Error**: {err} (polled ~60s across 2 navigations)\n\n"
                     f"**URL**: {page.url[:80]}\n\n"
                     f"**Please check**:\n"
                     f"1. DIRECT_WEB_URL secret is correct\n"
