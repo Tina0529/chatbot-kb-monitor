@@ -294,24 +294,34 @@ async def main() -> int:
             # data fetch, so POLL for rows instead of reading the DOM once —
             # locator().all() does not wait, so a single read races the render.
             print(f"\n[Step 3] Scanning website connector rows...")
+            # Only body-row selectors — a generic 'table tr' also matches the
+            # HEADER row, which renders before the tbody data and would make the
+            # scan exit early on a header-only match (false "0 sources" success).
             selectors_to_try = [
                 ('.mantine-Table-tbody tr', 'Mantine Table body rows'),
                 ('[class*="mantine-Table-tbody"] tr', 'Mantine Table body (variant)'),
                 ('tbody tr', 'Standard table body rows'),
-                ('table tr', 'All table rows'),
-                ('[role="row"]', 'ARIA rows'),
             ]
+            MIN_DATA_CELLS = 5  # a real source row has 7 cells; header has 0 td
 
-            async def scan_once(poll_seconds: int = 30):
-                """Poll the DOM for table rows up to poll_seconds."""
+            async def scan_once(poll_seconds: int = 40):
+                """Poll until real DATA rows (not just a rendered header) appear."""
                 waited = 0
                 while waited < poll_seconds:
                     for selector, _desc in selectors_to_try:
                         try:
                             candidate = await page.locator(selector).all()
-                            if len(candidate) > 0:
-                                print(f"  ✓ Found {len(candidate)} rows using '{selector}' (after {waited}s)")
-                                return candidate, selector
+                            if not candidate:
+                                continue
+                            # Keep only rows that actually carry data cells, so a
+                            # half-rendered header-only table doesn't win.
+                            data_rows = []
+                            for r in candidate:
+                                if await r.locator('td').count() >= MIN_DATA_CELLS:
+                                    data_rows.append(r)
+                            if data_rows:
+                                print(f"  ✓ Found {len(data_rows)} data rows using '{selector}' (after {waited}s)")
+                                return data_rows, selector
                         except Exception as e:
                             print(f"  Selector '{selector}' failed: {e}")
                             continue
@@ -321,11 +331,11 @@ async def main() -> int:
 
             # Up to 2 attempts: if the table renders empty (the known cold-load
             # race), re-trigger the client-side navigation and poll again.
-            rows, used_selector = await scan_once(poll_seconds=30)
+            rows, used_selector = await scan_once(poll_seconds=40)
             if not rows:
-                print("  ⚠ No rows yet — re-navigating (client-side) and retrying...")
+                print("  ⚠ No data rows yet — re-navigating (client-side) and retrying...")
                 await goto_web_connector()
-                rows, used_selector = await scan_once(poll_seconds=30)
+                rows, used_selector = await scan_once(poll_seconds=40)
 
             if not rows:
                 err = "No rows found on web-connector page"
