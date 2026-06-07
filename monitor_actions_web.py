@@ -304,8 +304,22 @@ async def main() -> int:
             ]
             MIN_DATA_CELLS = 5  # a real source row has 7 cells; header has 0 td
 
-            async def scan_once(poll_seconds: int = 40):
-                """Poll until real DATA rows (not just a rendered header) appear."""
+            async def header_rendered() -> bool:
+                """True once the table header has painted (page loaded OK, even
+                if the data rows are still being fetched)."""
+                try:
+                    return (await page.locator('table th').count()) > 0
+                except Exception:
+                    return False
+
+            async def scan_once(poll_seconds: int):
+                """Poll until real DATA rows (not just a rendered header) appear.
+
+                Does NOT re-navigate — the data list is fetched async after the
+                client-side route change, and re-navigating mid-flight CANCELS
+                that fetch and restarts the spinner. So we wait patiently on a
+                single navigation. CI renders rows in ~30s; allow generous slack.
+                """
                 waited = 0
                 while waited < poll_seconds:
                     for selector, _desc in selectors_to_try:
@@ -329,30 +343,43 @@ async def main() -> int:
                     waited += 3
                 return [], None
 
-            # Up to 2 attempts: if the table renders empty (the known cold-load
-            # race), re-trigger the client-side navigation and poll again.
-            rows, used_selector = await scan_once(poll_seconds=40)
+            # One long, UNINTERRUPTED poll first (the data fetch needs up to
+            # ~30s on CI and longer on slow days; re-navigating would cancel it).
+            rows, used_selector = await scan_once(poll_seconds=90)
             if not rows:
-                print("  ⚠ No data rows yet — re-navigating (client-side) and retrying...")
+                # Only NOW try a fresh client-side navigation, once, in case the
+                # first fetch genuinely stalled — then poll patiently again.
+                print("  ⚠ No data rows after 90s — re-navigating once and retrying...")
                 await goto_web_connector()
-                rows, used_selector = await scan_once(poll_seconds=40)
+                rows, used_selector = await scan_once(poll_seconds=60)
 
             if not rows:
-                err = "No rows found on web-connector page"
+                had_header = await header_rendered()
+                if had_header:
+                    err = ("Table header rendered but no data rows after ~150s — "
+                           "the source list is still loading (backend slow) or genuinely empty")
+                else:
+                    err = "Web-connector page did not render its table after ~150s"
                 print(f"\nERROR: {err}")
                 try:
                     await page.screenshot(path="screenshots/03_no_rows.png", full_page=True)
                 except Exception:
                     pass
+                checks = (
+                    "1. admin.gbase.ai data-source list API latency (backend)\n"
+                    "2. DIRECT_WEB_URL still points to the right dataset\n"
+                    "3. Whether the sources were intentionally removed"
+                ) if had_header else (
+                    "1. DIRECT_WEB_URL secret is correct\n"
+                    "2. Login credentials\n"
+                    "3. Page structure may have changed"
+                )
                 error_msg = (
                     f"⚠️ Website Monitor Failed\n\n"
                     f"**Time**: {get_japan_time().strftime('%Y-%m-%d %H:%M')} (Asia/Tokyo)\n\n"
-                    f"**Error**: {err} (polled ~60s across 2 navigations)\n\n"
+                    f"**Error**: {err}\n\n"
                     f"**URL**: {page.url[:80]}\n\n"
-                    f"**Please check**:\n"
-                    f"1. DIRECT_WEB_URL secret is correct\n"
-                    f"2. Login credentials\n"
-                    f"3. Page structure may have changed\n\n"
+                    f"**Please check**:\n{checks}\n\n"
                     f"---\n*This is an automated message*"
                 )
                 requests.post(webhook_url, json={"msg_type": "text", "content": {"text": error_msg}}, timeout=10)
